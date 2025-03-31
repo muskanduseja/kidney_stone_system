@@ -4,33 +4,30 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_cors import CORS
 from flask_migrate import Migrate
-
+from datetime import timedelta
 
 # Initialize Flask App
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins
 
-
-
-
 # Configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'  # SQLite database
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'your-secret-key'  # Change this in production
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=1)  # Token expiration time
 
 # Initialize Extensions
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
-
 migrate = Migrate(app, db)
 
 # User Model
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)  # Email is unique
-    password = db.Column(db.String(255), nullable=False)  # Hashed password
+    email = db.Column(db.String(100), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
 
 # Create Database Tables
 with app.app_context():
@@ -86,18 +83,57 @@ def login():
         if not bcrypt.check_password_hash(user.password, password):
             return jsonify({'message': 'Invalid password'}), 401
 
-        access_token = create_access_token(identity=user.email)
-        return jsonify({'access_token': access_token, 'username': user.username}), 200
+        access_token = create_access_token(
+            identity=user.email,
+            additional_claims={'username': user.username}
+        )
+        return jsonify({
+            'access_token': access_token,
+            'username': user.username,
+            'email': user.email
+        }), 200
     except Exception as e:
         return jsonify({'message': 'Error during login', 'error': str(e)}), 500
 
-# Protected Route (Only for Logged-in Users)
+# User Info Route
+@app.route('/api/user', methods=['GET'])
+@jwt_required()
+def get_user():
+    current_user_email = get_jwt_identity()
+    user = User.query.filter_by(email=current_user_email).first()
+    if not user:
+        return jsonify({'message': 'User not found'}), 404
+    return jsonify({
+        'username': user.username,
+        'email': user.email
+    }), 200
+
+# Logout Route
+@app.route('/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    # In production, you might want to add token to blacklist
+    return jsonify({'message': 'Successfully logged out'}), 200
+
+# Protected Route Example
 @app.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
     current_user = get_jwt_identity()
     return jsonify({'message': f'Hello, {current_user}! This is a protected route.'}), 200
 
-# Run Flask App
+# Error Handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'message': 'Resource not found'}), 404
+
+@app.errorhandler(401)
+def unauthorized(error):
+    return jsonify({'message': 'Unauthorized access'}), 401
+
+@app.errorhandler(500)
+def server_error(error):
+    return jsonify({'message': 'Internal server error'}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)
